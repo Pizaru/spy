@@ -7,52 +7,76 @@ type table = {
 	[any]: any
 }
 
-type MetaCallback = (Instance, ...any)->...any
+type MetaCallback = (Instance, ...any) -> ...any
 
 --// Modules
+local Modules
 local Process
+local Configuration
+local Config
 
---// This is a custom hookmetamethod function, feel free to replace with your own
+function Hook:Init(Data)
+    Modules = Data.Modules
+
+	Process = Modules.Process
+	Config = Modules.Config or Config
+	Configuration = Modules.Configuration or Configuration
+end
+
 --// The callback is expected to return a nil value sometimes which should be ingored
-local function HookMetaMethod(self, Call: string, Callback: MetaCallback): MetaCallback
-	local OriginalFunc
-	OriginalFunc = hookmetamethod(self, Call, function(...)
-		--// Invoke callback and check for a reponce otherwise ignored
-		local ReturnValues = Callback(...)
-		if ReturnValues then
-			local Length = table.maxn(ReturnValues)
-			return unpack(ReturnValues, 1, Length)
-		end
+local HookMiddle = newcclosure(function(OriginalFunc, Callback, ...)
+	--// Invoke callback and check for a reponce otherwise ignored
+	local ReturnValues = Callback(...)
+	if ReturnValues then
+		return Process:Unpack(ReturnValues)
+	end
 
-		--// Invoke orignal function
-		return OriginalFunc(...)
+	--// Invoke orignal function
+	return OriginalFunc(...)
+end)
+
+--// getrawmetatable
+function Hook:ReplaceMetaMethod(Object: Instance, Call: string, Callback: MetaCallback): MetaCallback
+	local Metatable = getrawmetatable(Object)
+	local OriginalFunc = rawget(Metatable, Call)
+	
+	--// Replace function
+	setreadonly(Metatable, false)
+	rawset(Metatable, Call, newcclosure(function(...)
+		return HookMiddle(OriginalFunc, Callback, ...)
+	end))
+	setreadonly(Metatable, true)
+
+	return OriginalFunc
+end
+
+--// hookfunction
+function Hook:HookFunction(Func: (...any) -> ...any, Callback: (...any) -> ...any)
+	local OriginalFunc
+	OriginalFunc = hookfunction(Func, function(...)
+		return HookMiddle(OriginalFunc, Callback, ...)
 	end)
 	return OriginalFunc
 end
 
---// Replace metatable function method, this can be a workaround on some games if hookmetamethod is detected
---// To use this, just uncomment it and comment out the method above
---//
--- local function HookMetaMethod(self, Call: string, Callback: MetaCallback): MetaCallback
--- 	local Metatable = getrawmetatable(self)
--- 	local OriginalFunc = rawget(Metatable, Call)
+--// hookmetamethod
+function Hook:HookMetaCall(Object: Instance, Call: string, Callback: MetaCallback): MetaCallback
+	local OriginalFunc
+	OriginalFunc = hookmetamethod(Object, Call, newcclosure(function(...)
+		return HookMiddle(OriginalFunc, Callback, ...)
+	end))
+	return OriginalFunc
+end
+
+function Hook:HookMetaMethod(Object: Instance, Call: string, Callback: MetaCallback): MetaCallback
+	--// Getrawmetatable
+	if Config.ReplaceMetaCallFunc then
+		return self:ReplaceMetaMethod(Object, Call, Callback)
+	end
 	
--- 	--// Replace function
--- 	setreadonly(Metatable, false)
--- 	rawset(Metatable, Call, function(...)
--- 		--// Invoke callback and check for a reponce otherwise ignored
--- 		local ReturnValues = Callback(...)
--- 		if ReturnValues then
--- 			local Length = table.maxn(ReturnValues)
--- 			return unpack(ReturnValues, 1, Length)
--- 		end
-
--- 		return OriginalFunc(...)
--- 	end)
--- 	setreadonly(Metatable, true)
-
--- 	return OriginalFunc
--- end
+	--// Hookmetamethod
+	return self:HookMetaCall(Object, Call, Callback)
+end
 
 local function Merge(Base: table, New: table)
 	for Key, Value in next, New do
@@ -74,53 +98,55 @@ local function ProcessRemote(OriginalFunc, MetaMethod: string, self, Method: str
 		OriginalFunc = OriginalFunc,
 		MetaMethod = MetaMethod,
 		TransferType = "Send",
-		Args = {...}
-	})
+		IsExploit = checkcaller()
+	}, ...)
 end
 
-local function __IndexCallback(OriginalIndex, self, Method: string)
-	--// Check if the orignal value is a function
-	local OriginalFunc = OriginalIndex(self, Method)
-	if typeof(OriginalFunc) ~= "function" then return end
+function Hook:HookRemoteTypeIndex(ClassName: string, FuncName: string)
+	local Remote = Instance.new(ClassName)
+	local Func = Remote[FuncName]
+	local OriginalFunc
 
-	--// Check if the Object is allowed 
-	if not Process:RemoteAllowed(self, "Send", Method) then return end
+	--// Remotes will share the same functions
+	--// 	For example FireServer will be identical
+	--// Addionally, this is for __index calls.
+	--// 	A __namecall hook will not detect this
+	OriginalFunc = self:HookFunction(Func, function(self, ...)
+		--// Check if the Object is allowed 
+		if not Process:RemoteAllowed(self, "Send", FuncName) then return end
 
-	--// Process the remote data
-	return {function(self, ...) -- Possible detection?
-		return ProcessRemote(OriginalFunc, "__index", self, Method, ...)
-	end}
-end
-
-function Hook:HookMeta()
-	--// Namecall hook
-	local On; On = HookMetaMethod(game, "__namecall", function(self, ...)
-		local Method = getnamecallmethod()
-		return ProcessRemote(On, "__namecall", self, Method, ...)
+		--// Process the remote data
+		return ProcessRemote(OriginalFunc, "__index", self, FuncName, ...)
 	end)
-	--// Index call hook
-	local Oi; Oi = HookMetaMethod(game, "__index", function(...)
-		return __IndexCallback(Oi, ...)
+end
+
+function Hook:HookRemoteIndexes()
+	local RemoteClassData = Process.RemoteClassData
+	for ClassName, Data in RemoteClassData do
+		local FuncName = Data.Send[1]
+		self:HookRemoteTypeIndex(ClassName, FuncName)
+	end
+end
+
+function Hook:BeginHooks()
+	--// Hook Remote functions
+	self:HookRemoteIndexes()
+
+	--// Namecall hook
+	local OriginalNameCall
+	OriginalNameCall = self:HookMetaMethod(game, "__namecall", function(self, ...)
+		local Method = getnamecallmethod()
+		return ProcessRemote(OriginalNameCall, "__namecall", self, Method, ...)
 	end)
 
 	Merge(self, {
-		OrignalNamecall = On,
-		OrignalIndex = Oi,
+		OrignalNamecall = OriginalNameCall,
+		--OrignalIndex = Oi
 	})
 end
 
 function Hook:Index(Object: Instance, Key: string)
-	local OrignalIndex = self.OrignalIndex
-	if OrignalIndex then
-		return OrignalIndex(Object, Key)
-	end
-
 	return Object[Key]
-end
-
-function Hook:Init(Data)
-    local Modules = Data.Modules
-	Process = Modules.Process
 end
 
 function Hook:PushConfig(Overwrites)
@@ -128,7 +154,14 @@ function Hook:PushConfig(Overwrites)
 end
 
 function Hook:HookClientInvoke(Remote, Method, Callback): ((...any) -> ...any)?
-	local PreviousFunction = getcallbackvalue(Remote, Method)
+	local Success, Function = pcall(function()
+		return getcallbackvalue(Remote, Method)
+	end)
+
+	--// Some executors like Potassium will throw a error if the Callback value is nil
+	if not Success then return end
+
+	local PreviousFunction = Function
 	Remote[Method] = Callback
 
 	return PreviousFunction
@@ -136,7 +169,7 @@ end
 
 function Hook:MultiConnect(Remotes)
 	for _, Remote in next, Remotes do
-		Hook:ConnectClientRecive(Remote)
+		self:ConnectClientRecive(Remote)
 	end
 end
 
@@ -147,8 +180,6 @@ function Hook:ConnectClientRecive(Remote)
 
 	--// Check if the Object has Remote class data
     local ClassData = Process:GetClassData(Remote)
-    if not ClassData then return end
-
     local IsRemoteFunction = ClassData.IsRemoteFunction
     local Method = ClassData.Receive[1]
 	local PreviousFunction = nil
@@ -161,51 +192,104 @@ function Hook:ConnectClientRecive(Remote)
             OriginalFunc = PreviousFunction,
             IsReceive = true,
             MetaMethod = "Connect",
-            Args = {...}
-        })
+			IsExploit = checkcaller()
+        }, ...)
 	end
 
 	--// Connect remote
 	if not IsRemoteFunction then
    		Remote[Method]:Connect(Callback)
 	else -- Remote functions
-		pcall(function()
-			self:HookClientInvoke(Remote, Method, Callback)
-		end)
+		self:HookClientInvoke(Remote, Method, Callback)
 	end
 end
 
-function Hook:BeginService(Libraries, ExtraData, ChannelId: number)
+function Hook:BeginService(Libraries, ExtraData, ChannelId, ...)
+	--// Librareis
 	local ReturnSpoofs = Libraries.ReturnSpoofs
 	local ProcessLib = Libraries.Process
 	local Communication = Libraries.Communication
+	local Generation = Libraries.Generation
+	local Config = Libraries.Config
 
+	--// Init data
 	local InitData = {
 		Modules = {
 			ReturnSpoofs = ReturnSpoofs,
+			Generation = Generation,
 			Communication = Communication,
 			Process = ProcessLib,
+			Config = Config,
 			Hook = self
-		}
+		},
+		Services = setmetatable({}, {
+			__index = function(self, Name: string): Instance
+				local Service = game:GetService(Name)
+				return cloneref(Service)
+			end,
+		})
 	}
-	
-	--// Communication configuration
-	local Channel = Communication:GetChannel(ChannelId)
+
+	--// Init libraries
 	Communication:Init(InitData)
+	ProcessLib:Init(InitData)
+	self:Init(InitData)
+
+	--// Communication configuration
+	local Channel, IsWrapped = Communication:GetCommChannel(ChannelId)
 	Communication:SetChannel(Channel)
-	Communication:AddConnection(function(Type: string, Id: string, RemoteData)
-		if Type ~= "RemoteData" then return end
-		ProcessLib:SetRemoteData(Id, RemoteData)
-	end)
+	Communication:AddTypeCallbacks({
+		["RemoteData"] = function(Id: string, RemoteData)
+			ProcessLib:SetRemoteData(Id, RemoteData)
+		end,
+		["AllRemoteData"] = function(Key: string, Value)
+			ProcessLib:SetAllRemoteData(Key, Value)
+		end,
+	})
 	
 	--// Process configuration
-	ProcessLib:Init(InitData)
-	ProcessLib:SetChannelId(ChannelId)
+	ProcessLib:SetChannel(Channel, IsWrapped)
 	ProcessLib:SetExtraData(ExtraData)
 
 	--// Hook configuration
-	self:Init(InitData)
-	self:HookMeta()
+	self:BeginHooks()
+end
+
+function Hook:LoadMetaHooks(ActorCode: string, ChannelId: number)
+	--// Hook actors
+	if not Configuration.NoActors then
+		wait()
+		self:RunOnActors(ActorCode, ChannelId)
+	end
+
+	--// Hook current thread
+	self:BeginService(Modules, nil, ChannelId) 
+end
+
+function Hook:LoadReceiveHooks()
+	local NoReceiveHooking = Config.NoReceiveHooking
+	local BlackListedServices = Config.BlackListedServices
+
+	if NoReceiveHooking then return end
+
+	--// Remote added
+	game.DescendantAdded:Connect(function(Remote) -- TODO
+		self:ConnectClientRecive(Remote)
+	end)
+
+	--// Collect remotes with nil parents
+	self:MultiConnect(getnilinstances())
+
+	--// Search for remotes
+	for _, Service in next, game:GetChildren() do
+		if table.find(BlackListedServices, Service.ClassName) then continue end
+		self:MultiConnect(Service:GetDescendants())
+	end
+end
+
+function Hook:LoadHooks(ActorCode: string, ChannelId: number)
+	self:LoadMetaHooks(ActorCode, ChannelId)
+	self:LoadReceiveHooks()
 end
 
 return Hook

@@ -68,15 +68,16 @@ function Files:MakePath(Path: string)
 	return `{Folder}/{Path}`
 end
 
-function Files:LoadCustomasset(Path: string)
+function Files:LoadCustomasset(Path: string): string?
 	if not getcustomasset then return end
 
-	--// Check if the file has content
-	local Content = readfile(Path)
-	if Content == "" then return end
-
 	--// Load custom AssetId
-	return getcustomasset(Path)
+	local Success, AssetId = pcall(getcustomasset, Path)
+	
+	if not Success then return end
+	if not AssetId or AssetId == "" then return end
+
+	return AssetId
 end
 
 function Files:GetFile(Path: string, CustomAsset: boolean?): string?
@@ -90,6 +91,7 @@ function Files:GetFile(Path: string, CustomAsset: boolean?): string?
 	if UseWorkspace then
 		Content = readfile(LocalPath)
 	else
+		--// Download with a HTTP request
 		Content = self:UrlFetch(`{RepoUrl}/{Path}`)
 	end
 
@@ -103,7 +105,6 @@ function Files:GetFile(Path: string, CustomAsset: boolean?): string?
 		return self:LoadCustomasset(LocalPath)
 	end
 
-	--// Download with a HTTP request
 	return Content
 end
 
@@ -169,8 +170,16 @@ end
 function Files:LoadLibraries(Scripts: table, ...): table
 	local Modules = {}
 	for Name, Content in next, Scripts do
+		--// Tables
+		if typeof(Content) ~= "string" then 
+			Modules[Name] = Content
+			continue 
+		end
+
+		--// Compile library 
 		local Closure = loadstring(Content, Name)
 		assert(Closure, `Failed to load {Name}`)
+
 		Modules[Name] = Closure(...)
 	end
 	return Modules
@@ -214,10 +223,22 @@ end
 function Files:CompileModule(Scripts): string
     local Out = "local Libraries = {"
     for Name, Content in Scripts do
+		if typeof(Content) ~= "string" then continue end
         Out ..= `	{Name} = (function()\n{Content}\nend)(),\n`
     end
 	Out ..= "}"
     return Out
+end
+
+function Files:MakeActorScript(Scripts, ChannelId: number): string
+	local ActorCode = Files:CompileModule(Scripts)
+	ActorCode ..= [[
+	local ExtraData = {
+		IsActor = true
+	}
+	]]
+	ActorCode ..= `Libraries.Hook:BeginService(Libraries, ExtraData, {ChannelId})`
+	return ActorCode
 end
 
 return Files

@@ -22,9 +22,9 @@ local Module = {
             Value = true,
             Label = "Ignore nil parents",
         },
-        CheckCaller = {
-            Value = false,
-            Label = "Ignore exploit calls",
+        LogExploit = {
+            Value = true,
+            Label = "Log exploit calls",
         },
         LogRecives = {
             Value = true,
@@ -51,6 +51,10 @@ local Module = {
         NoTreeNodes = {
             Value = false,
             Label = "No grouping"
+        },
+        TableArgs = {
+            Value = false,
+            Label = "Table args"
         },
     }
 }

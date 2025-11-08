@@ -1,3 +1,20 @@
+type table = {
+    [any]: any
+}
+
+type RemoteData = {
+	Remote: Instance,
+	IsReceive: boolean?,
+	Args: table,
+    Id: string,
+	Method: string,
+    TransferType: string,
+	ValueReplacements: table,
+    ReturnValues: table,
+    OriginalFunc: (Instance, ...any) -> ...any
+}
+
+--// Module
 local Process = {
     --// Remote classes
     RemoteClassData = {
@@ -33,25 +50,21 @@ local Process = {
             Send = {
                 "Fire",
             },
-            Receive = {
-                "Event",
-            }
+            -- Receive = {
+            --     "Event",
+            -- }
         },
         ["BindableFunction"] = {
             IsRemoteFunction = true,
             Send = {
                 "Invoke",
             },
-            Receive = {
-                "OnInvoke",
-            }
+            -- Receive = {
+            --     "OnInvoke",
+            -- }
         }
     },
     RemoteOptions = {}
-}
-
-type table = {
-	[any]: any
 }
 
 --// Modules
@@ -62,6 +75,7 @@ local Ui
 
 --// Communication channel
 local Channel
+local ChannelWrapped = false
 
 local function Merge(Base: table, New: table)
 	for Key, Value in next, New do
@@ -69,17 +83,36 @@ local function Merge(Base: table, New: table)
 	end
 end
 
---// Communication
-function Process:SetChannelId(ChannelId: number)
-    Channel = Communication:GetChannel(ChannelId)
-end
-
 function Process:Init(Data)
     local Modules = Data.Modules
+
+    --// Modules
     Ui = Modules.Ui
     Hook = Modules.Hook
     Communication = Modules.Communication
     ReturnSpoofs = Modules.ReturnSpoofs
+end
+
+--// Communication
+function Process:SetChannel(NewChannel: BindableEvent, IsWrapped: boolean)
+    Channel = NewChannel
+    ChannelWrapped = IsWrapped
+end
+
+function Process:DeepCloneTable(Table, Ignore: table?)
+	local New = {}
+	for Key, Value in next, Table do
+        --// Check if the value is ignored
+        if Ignore and table.find(Ignore, Value) then continue end
+
+		New[Key] = typeof(Value) == "table" and self:DeepCloneTable(Value) or Value
+	end
+	return New
+end
+
+function Process:Unpack(Table: table)
+	local Length = table.maxn(Table)
+	return unpack(Table, 1, Length)
 end
 
 function Process:PushConfig(Overwrites)
@@ -92,9 +125,8 @@ end
 
 function Process:CheckIsSupported(): boolean
     local CoreFunctions = {
-        "create_comm_channel",
-        "get_comm_channel",
         "hookmetamethod",
+        "hookfunction",
         "getrawmetatable",
         "setreadonly"
     }
@@ -119,11 +151,18 @@ function Process:GetClassData(Remote: Instance): table?
     return RemoteClassData[ClassName]
 end
 
+function Process:IsProtectedRemote(Remote: Instance): boolean
+    local IsDebug = Remote == Communication.DebugIdRemote
+    local IsChannel = Remote == (ChannelWrapped and Channel.Channel or Channel)
+
+    return IsDebug or IsChannel
+end
+
 function Process:RemoteAllowed(Remote: Instance, TransferType: string, Method: string?): boolean?
     if typeof(Remote) ~= 'Instance' then return end
     
-    if Remote == Communication.DebugIdRemote then return end
-    if Remote == Channel then return end
+    --// Check if the Remote is protected
+    if self:IsProtectedRemote(Remote) then return end
 
     --// Fetch class table
 	local ClassData = self:GetClassData(Remote)
@@ -131,7 +170,7 @@ function Process:RemoteAllowed(Remote: Instance, TransferType: string, Method: s
 
     --// Check if the transfer type has data
 	local Allowed = ClassData[TransferType]
-	if not Allowed then return warn("TransferType not Allowed") end
+	if not Allowed then return end
 
     --// Check if the method is allowed
 	if Method then
@@ -146,14 +185,21 @@ function Process:SetExtraData(Data: table)
     self.ExtraData = Data
 end
 
-function Process:GetRemoteSpoof(Remote: Instance, Method: string)
+function Process:GetRemoteSpoof(Remote: Instance, Method: string, ...)
     local Spoof = ReturnSpoofs[Remote]
 
     if not Spoof then return end
     if Spoof.Method ~= Method then return end
 
+    local ReturnValues = Spoof.Return
+
+    --// Call the ReturnValues function type
+    if typeof(ReturnValues) == "function" then
+        ReturnValues = ReturnValues(...)
+    end
+
 	Communication:Warn("Spoofed", Method)
-	return {Spoof.Return}
+	return ReturnValues
 end
 
 function Process:FindCallingLClosure(Offset: number)
@@ -174,19 +220,44 @@ function Process:FindCallingLClosure(Offset: number)
     end
 end
 
-function Process:ProcessRemote(Data)
+function Process:Callback(Data: RemoteData, ...): table?
+    --// Unpack Data
     local OriginalFunc = Data.OriginalFunc
+    local Id = Data.Id
+    local Method = Data.Method
+    local Remote = Data.Remote
+
+    local RemoteData = self:GetRemoteData(Id)
+
+    --// Check if the Remote is Blocked
+    if RemoteData.Blocked then return {} end
+
+    --// Check for a spoof
+    local Spoof = self:GetRemoteSpoof(Remote, Method, OriginalFunc, ...)
+    if Spoof then return Spoof end
+
+    --// Check if the orignal function was passed
+    if not OriginalFunc then return end
+
+    --// Invoke orignal function
+    return {
+        OriginalFunc(Remote, ...)
+    }
+end
+
+function Process:ProcessRemote(Data: RemoteData, ...): table?
+    --// Unpack Data
     local Remote = Data.Remote
 	local Method = Data.Method
-    local Args = Data.Args
     local TransferType = Data.TransferType
 
 	--// Check if the transfertype method is allowed
 	if TransferType and not self:RemoteAllowed(Remote, TransferType, Method) then return end
 
+    --// Fetch details
     local Id = Communication:GetDebugId(Remote)
-    local RemoteData = self:GetRemoteData(Id)
     local ClassData = self:GetClassData(Remote)
+    local Timestamp = tick()
 
     --// Add extra data into the log if needed
     local ExtraData = self.ExtraData
@@ -197,34 +268,24 @@ function Process:ProcessRemote(Data)
     --// Add to queue
     Merge(Data, {
 		CallingScript = getcallingscript(),
-		CallingFunction = self:FindCallingLClosure(5),
+		CallingFunction = self:FindCallingLClosure(6),
         Id = Id,
-		ClassData = ClassData
+		ClassData = ClassData,
+        Timestamp = Timestamp,
+        Args = Communication:SerializeTable({...})
     })
+
+    --// Invoke the Remote and log return values
+    local ReturnValues = self:Callback(Data, ...)
+    Data.ReturnValues = ReturnValues
 
     --// Queue log
     Communication:QueueLog(Data)
 
-    --// Blocked
-    if RemoteData.Blocked then return {} end
-
-    --// Check for a spoof
-	local Spoof = self:GetRemoteSpoof(Remote, Method)
-    if Spoof then return Spoof end
-
-    --// Call original function
-    if not OriginalFunc then return end
-
-    local ArgsLength = table.maxn(Args)
-    local ReturnValues = {OriginalFunc(Remote, unpack(Args, 1, ArgsLength))}
-
-    --// Log return values
-    Data.ReturnValues = ReturnValues
-
     return ReturnValues
 end
 
-function Process:UpdateAllRemoteData(Key: string, Value)
+function Process:SetAllRemoteData(Key: string, Value)
     local RemoteOptions = self.RemoteOptions
 	for RemoteID, Data in next, RemoteOptions do
 		Data[Key] = Value
@@ -257,6 +318,10 @@ end
 
 function Process:UpdateRemoteData(Id: string, RemoteData: table)
     Communication:Communicate("RemoteData", Id, RemoteData)
+end
+
+function Process:UpdateAllRemoteData(Key: string, Value)
+    Communication:Communicate("AllRemoteData", Key, Value)
 end
 
 return Process

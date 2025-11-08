@@ -1,6 +1,9 @@
 local Ui = {
-	DefaultEditorContent = "--Welcome to Sigma Spy",
-
+	DefaultEditorContent = [=[--[[ 
+	Welcome to Sigma Spy
+	Created by depso!
+]] ]=],
+	LogLimit = 100,
     SeasonLabels = { 
         January = "⛄%s⛄", 
         February = "🌨️%s🏂", 
@@ -8,20 +11,31 @@ local Ui = {
         April = "🐣%s✝️", 
         May = "🐝%s🌞", 
         June = "🪴%s🥕", 
-        July = "🌊%s🏖️", 
+        July = "🌊%s🌅", 
         August = "☀️%s🌞", 
         September = "🍁%s🍁", 
         October = "🎃%s🎃", 
         November = "🍂%s🍂", 
         December = "🎄%s🎁"
     },
+	Scales = {
+		["Mobile"] = UDim2.fromOffset(480, 280),
+		["Desktop"] = UDim2.fromOffset(600, 400),
+	},
     BaseConfig = {
         Theme = "SigmaSpy",
-        Size = UDim2.fromOffset(600, 400),
         NoScroll = true,
     },
 	OptionTypes = {
 		boolean = "Checkbox",
+	},
+	DisplayRemoteInfo = {
+		"MetaMethod",
+		"Method",
+		"Remote",
+		"CallingScript",
+		"IsActor",
+		"Id"
 	},
 
     Window = nil,
@@ -48,7 +62,10 @@ type Log = {
 	RemoteData: table?,
 	Id: string,
 	Selectable: table,
-	HeaderData: table
+	HeaderData: table,
+	ValueSwaps: table,
+	Timestamp: number,
+	IsExploit: boolean
 }
 
 --// Compatibility
@@ -67,6 +84,8 @@ local Generation
 local Process
 local Hook 
 local Config
+local Communication
+local Files
 
 local ActiveData = nil
 local RemotesCount = 0
@@ -74,12 +93,36 @@ local RemotesCount = 0
 local TextFont = Font.fromEnum(Enum.Font.Code)
 local FontSuccess = false
 
-local function DeepCloneTable(Table)
-	local New = {}
-	for Key, Value in next, Table do
-		New[Key] = typeof(Value) == "table" and DeepCloneTable(Value) or Value
-	end
-	return New
+function Ui:Init(Data)
+    local Modules = Data.Modules
+	local Services = Data.Services
+
+	--// Services
+	InsertService = Services.InsertService
+
+	--// Modules
+	Flags = Modules.Flags
+	Generation = Modules.Generation
+	Process = Modules.Process
+	Hook = Modules.Hook
+	Config = Modules.Config
+	Communication = Modules.Communication
+	Files = Modules.Files
+
+	--// ReGui
+	self:CheckScale()
+	self:LoadFont()
+	self:LoadReGui()
+end
+
+function Ui:CheckScale()
+	local BaseConfig = self.BaseConfig
+	local Scales = self.Scales
+
+	local IsMobile = ReGui:IsMobileDevice()
+	local Device = IsMobile and "Mobile" or "Desktop"
+
+	BaseConfig.Size = Scales[Device]
 end
 
 function Ui:SetClipboard(Content: string)
@@ -94,17 +137,21 @@ function Ui:TurnSeasonal(Text: string): string
     return Base:format(Text)
 end
 
-function Ui:SetFont(FontJsonFile: string, FontContent: string)
-	if not FontJsonFile then return end
+function Ui:LoadFont()
+	local FontFile = self.FontJsonFile
 
-	--// Check if the font downloaded successfully
-	FontSuccess = FontContent ~= ""
-	if not FontSuccess then return end
+	--// Get FontFace AssetId
+	local AssetId = Files:LoadCustomasset(FontFile)
+	if not AssetId then return end
 
-	--// Load fontface
-	local AssetId = getcustomasset(FontJsonFile, false)
+	--// Create custom FontFace
 	local NewFont = Font.new(AssetId)
 	TextFont = NewFont
+	FontSuccess = true
+end
+
+function Ui:SetFontFile(FontFile: string)
+	self.FontJsonFile = FontFile
 end
 
 function Ui:FontWasSuccessful()
@@ -114,6 +161,7 @@ function Ui:FontWasSuccessful()
 	local Window = self.Window
 	Window:SetTheme("DarkTheme")
 
+	--// Error message
 	self:ShowModal({
 		"Unfortunately your executor was unable to download the font and therefore switched to the Dark theme",
 		"\nIf you would like to use the ImGui theme, \nplease download the font (assets/ProggyClean.ttf)",
@@ -131,23 +179,6 @@ function Ui:LoadReGui()
 	ReGui:Init({
 		Prefabs = InsertService:LoadLocalAsset(PrefabsId)
 	})
-end
-
-function Ui:Init(Data)
-    local Modules = Data.Modules
-	local Services = Data.Services
-
-	--// Services
-	InsertService = Services.InsertService
-
-	--// Modules
-	Flags = Modules.Flags
-	Generation = Modules.Generation
-	Process = Modules.Process
-	Hook = Modules.Hook
-	Config = Modules.Config
-
-	self:LoadReGui()
 end
 
 type CreateButtons = {
@@ -202,6 +233,7 @@ function Ui:ShowModal(Lines: table)
 	local Window = self.Window
 	local Message = table.concat(Lines, "\n")
 
+	--// Modal Window
 	local ModalWindow = Window:PopupModal({
 		Title = "Sigma Spy"
 	})
@@ -281,7 +313,7 @@ function Ui:CreateElements(Parent, Options)
 		MaxColumns = 3
 	}):NextRow()
 
-	for Name, Data in next, Options do
+	for Name, Data in Options do
 		local Value = Data.Value
 		local Type = typeof(Value)
 
@@ -314,9 +346,11 @@ function Ui:DisplayAura()
     local Window = self.Window
     local Rand = self.RandomSeed
 
+	--// Aura (boiiiii)
     local AURA = Rand:NextInteger(1, 9999999)
     local AURADELAY = Rand:NextInteger(1, 5)
 
+	--// Title
 	local Title = ` Sigma Spy - Depso | AURA: {AURA} `
 	local Seasonal = self:TurnSeasonal(Title)
     Window:SetTitle(Seasonal)
@@ -342,6 +376,7 @@ function Ui:CreateWindowContent(Window)
         Fill = true
     })
 
+	--// Remotes list
     self.RemotesList = Layout:Canvas({
         Scroll = true,
         UiPadding = 5,
@@ -350,15 +385,18 @@ function Ui:CreateWindowContent(Window)
         Size = UDim2.new(0, 130, 1, 0)
     })
 
+	--// Tab box
 	local InfoSelector = Layout:TabSelector({
         NoAnimation = true,
         Size = UDim2.new(1, -130, 0.4, 0),
     })
 
-	self:MakeEditorTab(InfoSelector, Window)
-	self:MakeOptionsTab(InfoSelector)
 	self.InfoSelector = InfoSelector
 	self.CanvasLayout = Layout
+
+	--// Make tabs
+	self:MakeEditorTab(InfoSelector)
+	self:MakeOptionsTab(InfoSelector)
 end
 
 function Ui:MakeOptionsTab(InfoSelector)
@@ -401,6 +439,12 @@ function Ui:MakeOptionsTab(InfoSelector)
 				Callback = function()
 					Process:UpdateAllRemoteData("Excluded", false)
 				end,
+			},
+			{
+				Text = "Copy Discord",
+				Callback = function()
+					self:SetClipboard("https://discord.gg/s9ngmUDWgb")
+				end,
 			}
 		}
 	})
@@ -413,13 +457,12 @@ function Ui:MakeOptionsTab(InfoSelector)
 end
 
 function Ui:AddDetailsSection(OptionsTab)
-	OptionsTab:Separator({Text="Infomation"})
+	OptionsTab:Separator({Text="Information"})
 	OptionsTab:BulletText({
 		Rows = {
-			"Sigma spy - Created by depso!",
-			"Thank you to syn for your suggestions and testing",
-			"I wish potassium wasn't so crudely produced",
-			"Boiiiiii what did you say about Sigma Spy 💀💀 (+999999 AURA)"
+			"Sigma spy - Written by depso!",
+			"Libraries: Roblox-Parser, Dear-ReGui",
+			"Thank you to syn for your suggestions and testing"
 		}
 	})
 end
@@ -431,18 +474,20 @@ local function MakeActiveDataCallback(Func: string)
 	end
 end
 
-function Ui:MakeEditorTab(InfoSelector, Window)
-	local SyntaxColors = Config.SyntaxColors
+function Ui:MakeEditorTab(InfoSelector)
 	local Default = self.DefaultEditorContent
+	local Window = self.Window
+
+	local SyntaxColors = Config.SyntaxColors
 
 	--// IDE
 	local CodeEditor = IDEModule.CodeFrame.new({
 		Editable = false,
 		FontSize = 13,
 		Colors = SyntaxColors,
-		FontFace = TextFont,
-		Text = Default
+		FontFace = TextFont
 	})
+	CodeEditor:SetText(Default)
 	
 	local EditorTab = InfoSelector:CreateTab({
 		Name = "Editor"
@@ -454,7 +499,6 @@ function Ui:MakeEditorTab(InfoSelector, Window)
 		WindowClass = Window,
 		Class = {
 			--Border = true,
-			--Size = UDim2.fromScale(0.75, 0.4)
 			Fill = true,
 			Active = true,
 			Parent = EditorTab:GetObject(),
@@ -472,7 +516,7 @@ function Ui:MakeEditorTab(InfoSelector, Window)
 				Text = "Copy",
 				Callback = function()
 					local Script = CodeEditor:GetText()
-					Ui:SetClipboard(Script)
+					self:SetClipboard(Script)
 				end
 			},
 			{
@@ -484,11 +528,11 @@ function Ui:MakeEditorTab(InfoSelector, Window)
 				Callback = MakeActiveDataCallback("GetReturn")
 			},
 			{
-				Text = "Generate info",
+				Text = "Get info",
 				Callback = MakeActiveDataCallback("GenerateInfo")
 			},
 			{
-				Text = "Decompile script",
+				Text = "Decompile source",
 				Callback = MakeActiveDataCallback("Decompile")
 			}
 		}
@@ -497,53 +541,79 @@ function Ui:MakeEditorTab(InfoSelector, Window)
 	self.CodeEditor = CodeEditor
 end
 
+function Ui:ShouldFocus(Tab): boolean
+	local InfoSelector = self.InfoSelector
+	local ActiveTab = InfoSelector.ActiveTab
+
+	--// If there is an empty tab
+	if not ActiveTab then
+		return true
+	end
+
+	return InfoSelector:CompareTabs(ActiveTab, Tab)
+end
+
+function Ui:RemovePreviousTab(Title: string): boolean
+	--// No previous tabs
+	if not ActiveData then 
+		return false 
+	end
+
+	--// TabSelector
+	local InfoSelector = self.InfoSelector
+
+	--// Previous elements
+	local PreviousTab = ActiveData.Tab
+	local PreviousSelectable = ActiveData.Selectable
+
+	--// Remove previous tab and set selectable focus
+	local TabFocused = self:ShouldFocus(PreviousTab)
+	InfoSelector:RemoveTab(PreviousTab)
+	PreviousSelectable:SetSelected(false)
+
+	--// Create new tab
+	return TabFocused
+end
+
 function Ui:SetFocusedRemote(Data)
-	--// To display in the table
-	local Display = {
-		"MetaMethod",
-		"Method",
-		"Remote",
-		"CallingScript",
-		"CallingActor",
-		"IsActor",
-		"Id"
-	}
-	
 	--// Unpack remote data
 	local Remote = Data.Remote
 	local Method = Data.Method
-	local MetaMethod = Data.MetaMethod
 	local IsReceive = Data.IsReceive
 	local Script = Data.CallingScript
-	local Function = Data.CallingFunction
 	local ClassData = Data.ClassData
 	local HeaderData = Data.HeaderData
+	local ValueSwaps = Data.ValueSwaps
 	local Args = Data.Args
 	local Id = Data.Id
 
+	--// Flags
+	local TableArgs = Flags:GetFlagValue("TableArgs")
+
 	--// Unpack info
 	local RemoteData = Process:GetRemoteData(Id)
-	local SourceScript = rawget(getfenv(Function), "script")
 	local IsRemoteFunction = ClassData.IsRemoteFunction
 
 	--// UI data
-	local InfoSelector = self.InfoSelector
 	local CodeEditor = self.CodeEditor
-	local TabFocused = false
-	
-	--// Remote previous remote tab
-	if ActiveData then
-		local Tab = ActiveData.Tab
-		local Selectable = ActiveData.Selectable
-		local ActiveTab = InfoSelector.ActiveTab
+	local ToDisplay = self.DisplayRemoteInfo
+	local InfoSelector = self.InfoSelector
 
-		TabFocused = InfoSelector:CompareTabs(ActiveTab, Tab)
-		InfoSelector:RemoveTab(Tab)
-		Selectable:SetSelected(false)
-	end
+	local TabFocused = self:RemovePreviousTab()
+	local Tab = InfoSelector:CreateTab({
+		Name = `Remote: {Remote}`,
+		Focused = TabFocused
+	})
+
+	--// Create new parser
+	local Module = Generation:NewParser()
+	local Parser = Module.Parser
+	local Formatter = Module.Formatter
+	Formatter:SetValueSwaps(ValueSwaps)
 
 	--// Set this log to be selected
 	ActiveData = Data
+	Data.Tab = Tab
 	Data.Selectable:SetSelected(true)
 
 	local function SetIDEText(...)
@@ -553,10 +623,11 @@ function Ui:SetFocusedRemote(Data)
 	--// Functions
 	function Data:RepeatCall()
 		local Signal = Hook:Index(Remote, Method)
+
 		if IsReceive then
-			firesignal(Signal, unpack(Args))
+			firesignal(Signal, Process:Unpack(Args))
 		else
-			Signal(Remote, unpack(Args))
+			Signal(Remote, Process:Unpack(Args))
 		end
 	end
 	function Data:GetReturn()
@@ -572,7 +643,7 @@ function Ui:SetFocusedRemote(Data)
 		end
 
 		--// Generate script
-		local Script = Generation:TableScript(ReturnValues)
+		local Script = Generation:TableScript(Module, ReturnValues)
 		SetIDEText(Script)
 	end
 	function Data:GenerateInfo()
@@ -584,41 +655,9 @@ function Ui:SetFocusedRemote(Data)
 			SetIDEText(Script)
 			return 
 		end
-		
-		local Connections = {}
-		local FunctionInfo = {
-			["Script"] = {
-				["SourceScript"] = SourceScript,
-				["CallingScript"] = Script
-			},
-			["Remote"] = {
-				["Remote"] = Remote,
-				["RemoteID"] = Id,
-				["Method"] = Method
-			},
-			["MetaMethod"] = MetaMethod,
-			["IsActor"] = Data.IsActor,
-			["CallingFunction"] = Function,
-			["Connections"] = Connections
-		}
-
-		--// Some closures may not be lua
-		if islclosure(Function) then
-			FunctionInfo["UpValues"] = debug.getupvalues(Function)
-			FunctionInfo["Constants"] = debug.getconstants(Function)
-		end
-		
-		--// Get remote connections
-		local ReceiveMethods = ClassData.Receive
-		for _, Method: string in next, ReceiveMethods do
-			pcall(function() --TODO GETCALLBACKVALUE
-				local Signal = Hook:Index(Remote, Method)
-				Connections[Method] = Generation:ConnectionsTable(Signal)
-			end)
-		end
 
 		--// Generate script
-		local Script = Generation:TableScript(FunctionInfo)
+		local Script = Generation:AdvancedInfo(Module, Data)
 		SetIDEText(Script)
 	end
 	function Data:Decompile()
@@ -643,17 +682,6 @@ function Ui:SetFocusedRemote(Data)
 
 		SetIDEText(Source)
 	end
-
-	--// Create remote details tab
-	local Tab = InfoSelector:CreateTab({
-		Name = `Remote: {Remote}`,
-		Focused = TabFocused
-	})
-	Data.Tab = Tab
-	
-	--// Create new parser
-	local Module = Generation:NewParser()
-	local Parser = Module.Parser
 	
 	--// RemoteOptions
 	self:CreateOptionsForDict(Tab, RemoteData, function()
@@ -693,11 +721,19 @@ function Ui:SetFocusedRemote(Data)
 					HeaderData:Remove()
 					ActiveData = nil
 				end,
+			},
+			{
+				Text = "Dump logs",
+				Callback = function()
+					local Logs = HeaderData.Entries
+					local FilePath = Generation:DumpLogs(Logs)
+					self:ShowModal({"Saved dump to", FilePath})
+				end,
 			}
 		}
 	})
 
-	--// Remote infomation
+	--// Remote information
 	local Rows = {"Name", "Value"}
 	local DataTable = Tab:Table({
 		Border = true,
@@ -713,7 +749,7 @@ function Ui:SetFocusedRemote(Data)
 	end
 
 	--// Table layout
-	for RowIndex, Name in Display do
+	for RowIndex, Name in ToDisplay do
 		local Row = DataTable:Row()
 		
 		--// Create Columns
@@ -729,12 +765,18 @@ function Ui:SetFocusedRemote(Data)
 	end
 	
 	--// Generate script
-	local Parsed = Generation:RemoteScript(Module, Data)
+	local Parsed
+	if TableArgs then
+		Parsed = Generation:TableScript(Module, Args)
+	else
+		Parsed = Generation:RemoteScript(Module, Data)
+	end
+
 	SetIDEText(Parsed)
 end
 
 function Ui:GetRemoteHeader(Data: Log)
-	--// UI data
+	local LogLimit = self.LogLimit
 	local Logs = self.Logs
 	local RemotesList = self.RemotesList
 
@@ -751,7 +793,9 @@ function Ui:GetRemoteHeader(Data: Log)
 
 	--// Header data
 	local HeaderData = {	
-		LogCount = 0
+		LogCount = 0,
+		Data = Data,
+		Entries = {}
 	}
 
 	--// Increment treenode count
@@ -765,9 +809,24 @@ function Ui:GetRemoteHeader(Data: Log)
 		})
 	end
 
-	function HeaderData:LogAdded()
+	function HeaderData:CheckLimit()
+		local Entries = self.Entries
+		if #Entries < LogLimit then return end
+			
+		--// Get and remove last element
+		local Log = table.remove(Entries, 1)
+		Log.Selectable:Remove()
+	end
+
+	function HeaderData:LogAdded(Data)
 		--// Increment log count
 		self.LogCount += 1
+		self:CheckLimit()
+
+		--// Add entry
+		local Entries = self.Entries
+		table.insert(Entries, Data)
+		
 		return self
 	end
 
@@ -818,10 +877,16 @@ end
 function Ui:BeginLogService()
 	coroutine.wrap(function()
 		while true do
-			Ui:ProcessLogQueue()
-			wait()
+			self:ProcessLogQueue()
+			task.wait()
 		end
 	end)()
+end
+
+function Ui:FilterName(Name: string): string
+	local Trimmed = Name:sub(1, 15)
+	local Filtred = Trimmed:gsub("[\n\r]", "")
+	return Filtred
 end
 
 function Ui:CreateLog(Data: Log)
@@ -831,6 +896,8 @@ function Ui:CreateLog(Data: Log)
     local Args = Data.Args
     local IsReceive = Data.IsReceive
 	local Id = Data.Id
+	local Timestamp = Data.Timestamp
+	local IsExploit = Data.IsExploit
 	
 	local IsNilParent = Hook:Index(Remote, "Parent") == nil
 	local RemoteData = Process:GetRemoteData(Id)
@@ -840,8 +907,8 @@ function Ui:CreateLog(Data: Log)
 	if Paused then return end
 
 	--// Check caller (Ignore exploit calls)
-	local CheckCaller = Flags:GetFlagValue("CheckCaller")
-	if CheckCaller and not checkcaller() then return end
+	local LogExploit = Flags:GetFlagValue("LogExploit")
+	if not LogExploit and IsExploit then return end
 
 	--// IgnoreNil
 	local IgnoreNil = Flags:GetFlagValue("IgnoreNil")
@@ -857,10 +924,15 @@ function Ui:CreateLog(Data: Log)
     --// Excluded check
     if RemoteData.Excluded then return end
 
-	--// Deep clone data
-	local ClonedArgs = DeepCloneTable({unpack(Args)})
-	Data.Args = ClonedArgs
+	--// Deserialize arguments
+	Args = Communication:DeserializeTable(Args)
 
+	--// Deep clone data
+	local ClonedArgs = Process:DeepCloneTable(Args)
+	Data.Args = ClonedArgs
+	Data.ValueSwaps = Generation:MakeValueSwapsTable(Timestamp)
+
+	--// Generate log title
 	local Color = Config.MethodColors[Method:lower()]
 	local Text = NoTreeNodes and `{Remote} | {Method}` or Method
 
@@ -869,18 +941,19 @@ function Ui:CreateLog(Data: Log)
 	if FindString then
 		for _, Arg in next, ClonedArgs do
 			if typeof(Arg) == "string" then
-				Text = `{Arg:sub(1,15)} | {Text}`
+				local Filtred = self:FilterName(Arg)
+				Text = `{Filtred} | {Text}`
 				break
 			end
 		end
 	end
 
-	--// HeaderData
-	local HeaderData = self:GetRemoteHeader(Data):LogAdded()
+	--// Fetch HeaderData by the RemoteID used for stacking
+	local Header = self:GetRemoteHeader(Data)
 	local RemotesList = self.RemotesList
 
-	local LogCount = HeaderData.LogCount
-	local TreeNode = HeaderData.TreeNode 
+	local LogCount = Header.LogCount
+	local TreeNode = Header.TreeNode 
 	local Parent = TreeNode or RemotesList
 
 	--// Increase log count - TreeNodes are in GetRemoteHeader function
@@ -889,19 +962,19 @@ function Ui:CreateLog(Data: Log)
 		LogCount = RemotesCount
 	end
 
-    local function SetFocused()
-		self:SetFocusedRemote(Data)
-    end
-
     --// Create focus button
-	Data.HeaderData = HeaderData
+	Data.HeaderData = Header
 	Data.Selectable = Parent:Selectable({
 		Text = Text,
         LayoutOrder = -1 * LogCount,
-        Callback = SetFocused,
 		TextColor3 = Color,
-		TextXAlignment = Enum.TextXAlignment.Left
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Callback = function()
+			self:SetFocusedRemote(Data)
+		end,
     })
+
+	Header:LogAdded(Data)
 end
 
 return Ui
