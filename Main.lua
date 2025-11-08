@@ -22,7 +22,7 @@ local Configuration = {
 	UseWorkspace = false, 
 	NoActors = false,
 	RepoUrl = "https://raw.githubusercontent.com/Pizaru/spy/refs/heads/main",
-	ParserUrl = "https://raw.githubusercontent.com/depthso/Roblox-parser/refs/heads/main"
+	ParserUrl = "https://raw.githubusercontent.com/Pizaru/parser/refs/heads/main"
 }
 
 --// Load overwrites
