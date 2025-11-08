@@ -5,13 +5,22 @@ type table = {
 }
 
 --// Libraries
-local ParserModule = loadstring(game:HttpGet('https://raw.githubusercontent.com/Pizaru/parser/refs/heads/main/main.luau'))()
+local src = game:HttpGet('https://raw.githubusercontent.com/Pizaru/parser/refs/heads/main/main.luau')
+local ParserModule, err = loadstring(src)
+assert(ParserModule, "loadstring failed: "..tostring(err))
+ParserModule = ParserModule()  -- jalankan chunk
 
---// Parser
+assert(type(ParserModule)=="table", "ParserModule tidak mengembalikan table")
+
+ParserModule.ImportUrl = "https://raw.githubusercontent.com/Pizaru/parser/refs/heads/main"
+
 function ParserModule:Import(Name: string)
-	local Url = `{self.ImportUrl}/{Name}.lua`
-	return loadstring(game:HttpGet(Url))()
+    local Url = string.format("%s/%s.lua", self.ImportUrl, Name)
+    local chunk, lerr = loadstring(game:HttpGet(Url))
+    assert(chunk, "Import loadstring failed: "..tostring(lerr))
+    return chunk()
 end
+
 ParserModule:Load()
 
 --// Modules
