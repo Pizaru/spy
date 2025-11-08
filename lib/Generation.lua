@@ -5,7 +5,7 @@ type table = {
 }
 
 --// Libraries
-local ParserModule = loadstring(game:HttpGet('https://raw.githubusercontent.com/Pizaru/parser/refs/heads/main/main.lua'))()
+local ParserModule = loadstring(game:HttpGet('https://raw.githubusercontent.com/Pizaru/parser/refs/heads/main/main.luau'))()
 
 --// Parser
 function ParserModule:Import(Name: string)
