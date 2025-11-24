@@ -170,7 +170,19 @@ function Ui:FontWasSuccessful()
 end
 
 function Ui:LoadReGui()
-	local ThemeConfig = Config.ThemeConfig
+    -- Amankan variabel Config dan ThemeConfig
+    local ThemeConfig = Config and Config.ThemeConfig
+
+    -- Jika ThemeConfig belum ada, buatkan tabel kosong sebagai default
+    if not ThemeConfig then
+        ThemeConfig = {}
+        -- Jika Config ada, simpan tabel default ini di sana (opsional)
+        if Config then
+             Config.ThemeConfig = ThemeConfig
+        end
+    end
+    
+    -- Sekarang aman untuk mengatur TextFont
 	ThemeConfig.TextFont = TextFont
 
 	--// ReGui
