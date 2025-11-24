@@ -60,8 +60,12 @@ function Generation:LoadParser(ImportUrl: string)
 		return Closure()
 	end
 
-	--// Load parser module
-	ParserModule:Load()
+	if ParserModule and type(ParserModule.Load) == "function" then
+		ParserModule:Load()
+	else
+        -- Tambahkan pesan peringatan jika fungsi Load hilang
+		warn("ParserModule is missing the required 'Load' method.")
+	end
 end
 
 function Generation:MakeValueSwapsTable(): table
